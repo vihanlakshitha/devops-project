@@ -10,6 +10,11 @@ env:
   REPO: devops-project
   WIF_PROVIDER: projects/252094799492/locations/global/workloadIdentityPools/github-pool/providers/github-provider
   WIF_SERVICE_ACCOUNT: github-actions-deployer@project-61969037-62f2-4a50-8c5.iam.gserviceaccount.com
+  DB_INSTANCE_CONNECTION_NAME: project-61969037-62f2-4a50-8c5:us-central1:devops-project-db
+  DB_NAME: devops_project
+  DB_USER: appuser
+  DB_SECRET_ID: devops-project-db-password
+  RUNTIME_SERVICE_ACCOUNT: devops-backend-runtime@project-61969037-62f2-4a50-8c5.iam.gserviceaccount.com
 
 permissions:
   contents: read
@@ -21,6 +26,20 @@ jobs:
     strategy:
       matrix:
         service: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: devops_project
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,6 +58,12 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.service }}
         run: npm test
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: devops_project
 
   deploy:
     needs: test
@@ -71,7 +96,13 @@ jobs:
           service: devops-backend
           region: ${{ env.REGION }}
           image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/backend:${{ github.sha }}
-          flags: --allow-unauthenticated --port=3001
+          flags: >-
+            --allow-unauthenticated
+            --port=3001
+            --add-cloudsql-instances=${{ env.DB_INSTANCE_CONNECTION_NAME }}
+            --service-account=${{ env.RUNTIME_SERVICE_ACCOUNT }}
+            --set-env-vars=DB_SOCKET_PATH=/cloudsql/${{ env.DB_INSTANCE_CONNECTION_NAME }},DB_NAME=${{ env.DB_NAME }},DB_USER=${{ env.DB_USER }}
+            --set-secrets=DB_PASSWORD=${{ env.DB_SECRET_ID }}:latest
 
       - name: Point frontend at deployed backend URL
         run: |
