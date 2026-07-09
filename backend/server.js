@@ -15,6 +15,10 @@ app.get('/api/message', (req, res) => {
   res.json({ message: 'Hello from the backend!' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Backend running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
