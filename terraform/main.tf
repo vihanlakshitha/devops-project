@@ -4,6 +4,8 @@ resource "google_project_service" "apis" {
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
     "iamcredentials.googleapis.com",
+    "sqladmin.googleapis.com",
+    "secretmanager.googleapis.com",
   ])
 
   project            = var.project_id
@@ -74,4 +76,75 @@ resource "google_service_account_iam_member" "github_wif_binding" {
   service_account_id = google_service_account.github_actions_deployer.name
   role                = "roles/iam.workloadIdentityUser"
   member              = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/${var.github_repository}"
+}
+
+# --- Database ---
+
+resource "google_sql_database_instance" "db" {
+  project             = var.project_id
+  name                = "devops-project-db"
+  region              = var.region
+  database_version    = "POSTGRES_16"
+  deletion_protection = false
+
+  settings {
+    tier    = "db-f1-micro"
+    edition = "ENTERPRISE"
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_sql_database" "app" {
+  project  = var.project_id
+  name     = "devops_project"
+  instance = google_sql_database_instance.db.name
+}
+
+resource "random_password" "db_password" {
+  length  = 24
+  special = false
+}
+
+resource "google_sql_user" "app" {
+  project  = var.project_id
+  name     = "appuser"
+  instance = google_sql_database_instance.db.name
+  password = random_password.db_password.result
+}
+
+resource "google_secret_manager_secret" "db_password" {
+  project   = var.project_id
+  secret_id = "devops-project-db-password"
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_version" "db_password" {
+  secret      = google_secret_manager_secret.db_password.id
+  secret_data = random_password.db_password.result
+}
+
+# --- Cloud Run runtime identity (separate from the GitHub Actions deployer) ---
+
+resource "google_service_account" "backend_runtime" {
+  project      = var.project_id
+  account_id   = "devops-backend-runtime"
+  display_name = "Cloud Run backend runtime"
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_runtime_secret_access" {
+  secret_id = google_secret_manager_secret.db_password.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.backend_runtime.email}"
+}
+
+resource "google_project_iam_member" "backend_runtime_cloudsql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.backend_runtime.email}"
 }
